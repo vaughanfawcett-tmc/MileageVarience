@@ -1,0 +1,136 @@
+# Trip Reason Classification Rules
+# Maintained by TMC Employee Services. Edit keywords/phrases here without touching code.
+# Matching is case-insensitive, whole-word where possible. Phrases match as substrings.
+#
+# Precedence (highest wins):
+#   1. empty_or_generic         -> Not Acceptable
+#   2. not_acceptable           -> Not Acceptable
+#   3. acceptable               -> Acceptable
+#   4. potentially_acceptable   -> Potentially Acceptable
+#   5. default (no match)       -> Potentially Acceptable (flag for review)
+
+# Variance threshold (%) above which a reason is required.
+# Trips at or below this variance are auto-classified as Acceptable regardless of reason text.
+variance_tolerance_pct: 10
+
+empty_or_generic:
+  - ""
+  - "-"
+  - "."
+  - "n/a"
+  - "na"
+  - "none"
+  - "no reason"
+  - "no comment"
+  - "idk"
+  - "dunno"
+  - "don't know"
+  - "dont know"
+  - "not sure"
+  - "?"
+
+not_acceptable:
+  keywords:
+    - personal
+    - private
+    - shopping
+    - shops
+    - gym
+    - pub
+    - social
+    - holiday
+    - vacation
+    - leisure
+    - dentist
+    - doctor
+    - hospital appointment
+    - school run
+    - school pickup
+    - school pick up
+    - dropped kids
+    - dropping kids
+    - picked up wife
+    - picked up husband
+    - picked up partner
+    - home for lunch
+    - lunch at home
+    - went home
+    - going home
+    - house move
+    - moving house
+    - mistake
+    - wrong destination
+    - test drive
+    - joy ride
+    - took the long way
+    - scenic route
+
+acceptable:
+  keywords:
+    - diversion
+    - diverted
+    - road closed
+    - road closure
+    - roadworks
+    - road works
+    - accident
+    - collision
+    - traffic jam
+    - heavy traffic
+    - traffic congestion
+    - multiple stops
+    - multi-drop
+    - multi drop
+    - multiple drops
+    - multiple deliveries
+    - multiple collections
+    - customer visit
+    - customer site
+    - client visit
+    - client meeting
+    - site visit
+    - depot visit
+    - depot collection
+    - depot drop
+    - delivery
+    - collection
+    - breakdown
+    - vehicle breakdown
+    - emergency repair
+    - mot
+    - service
+    - fleet service
+    - fuel collection
+    - return to depot
+    - one-way system
+    - one way system
+    - bridge closed
+    - motorway closed
+    - police diversion
+    - flood
+    - snow
+    - ice
+
+potentially_acceptable:
+  keywords:
+    - detour
+    - longer route
+    - alternative route
+    - alternate route
+    - sat nav
+    - satnav
+    - gps
+    - missed turn
+    - took wrong turn
+    - unfamiliar
+    - new route
+    - training
+    - induction
+    - meeting
+    - visit
+    - appointment
+    - parking
+    - no parking
+    - couldn't park
+    - extra stop
+    - quick stop
