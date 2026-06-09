@@ -152,13 +152,25 @@ def _classify_df(df: pd.DataFrame, model: str, limit: int | None):
         f"{len(distinct):,} distinct reasons sent to the model"
     )
 
-    client = llm.make_client()
-    bar = st.progress(0.0, text="Classifying…")
-    results = llm.classify(
-        client, distinct, model=model,
-        on_progress=lambda d, t: bar.progress(d / t, text=f"Classifying… {d}/{t} batches"),
-    )
-    bar.empty()
+    if not (os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")):
+        st.error(
+            "No **OPENROUTER_API_KEY** is set on the server, so classification "
+            "can't run. Add it in Render → your service → **Environment** "
+            "(an `sk-or-v1-…` key from openrouter.ai/keys), save, and redeploy."
+        )
+        st.stop()
+
+    try:
+        client = llm.make_client()
+        bar = st.progress(0.0, text="Classifying…")
+        results = llm.classify(
+            client, distinct, model=model,
+            on_progress=lambda d, t: bar.progress(d / t, text=f"Classifying… {d}/{t} batches"),
+        )
+        bar.empty()
+    except Exception as exc:  # surface API/network errors instead of dying silently
+        st.error(f"Classification failed: {exc}")
+        st.stop()
 
     by_reason = dict(zip(distinct, results))
     df["Classification"] = df["_reason"].map(lambda r: by_reason[r].category if r in by_reason else "")
