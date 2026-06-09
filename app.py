@@ -53,8 +53,7 @@ st.set_page_config(page_title="Trip Reason Variance", page_icon="📊", layout="
 st.markdown(
     """
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-      html, body, [class*="css"], button, input, textarea, select { font-family: 'Inter', -apple-system, system-ui, sans-serif; }
+      html, body, [class*="css"], button, input, textarea, select { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', system-ui, sans-serif; }
       #MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"] { display: none !important; }
       header[data-testid="stHeader"] { background: transparent; height: 0; }
       .block-container { padding: 2.2rem 3rem 3rem; max-width: 1240px; }

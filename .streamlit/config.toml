@@ -9,5 +9,13 @@ font = "sans serif"
 [client]
 toolbarMode = "minimal"
 
+[browser]
+# Don't phone home to Streamlit's telemetry on each session — trims load latency.
+gatherUsageStats = false
+
+[server]
+# No file-watching in production (Render had no watchdog); avoids wasted startup work.
+fileWatcherType = "none"
+
 [ui]
 hideTopBar = true
