@@ -178,6 +178,16 @@ def _classify_df(df: pd.DataFrame, model: str, limit: int | None):
     return df
 
 
+@st.cache_data(show_spinner=False)
+def _load_rows_cached(data: bytes) -> pd.DataFrame:
+    """Parse an uploaded workbook once and cache it, keyed on the file bytes.
+
+    Streamlit re-runs the whole script on every interaction; without caching,
+    the (slow) openpyxl parse of a large export would repeat each time.
+    """
+    return cr.load_rows(io.BytesIO(data))
+
+
 def _to_xlsx_bytes(df: pd.DataFrame) -> bytes:
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=True) as tmp:
         cr.write_workbook(df, tmp.name)
@@ -235,7 +245,8 @@ if uploaded is None and "classified" not in st.session_state:
 
 if uploaded is not None and "classified" not in st.session_state:
     try:
-        df_raw = cr.load_rows(io.BytesIO(uploaded.getvalue()))
+        with st.spinner(f"Reading {uploaded.name}… large exports can take a few seconds."):
+            df_raw = _load_rows_cached(uploaded.getvalue())
     except Exception as exc:  # surface bad/unexpected workbooks instead of halting silently
         st.error(f"Couldn't read **{uploaded.name}**: {exc}")
         st.stop()
