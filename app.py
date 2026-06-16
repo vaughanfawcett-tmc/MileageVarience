@@ -234,7 +234,11 @@ if uploaded is None and "classified" not in st.session_state:
     )
 
 if uploaded is not None and "classified" not in st.session_state:
-    df_raw = cr.load_rows(io.BytesIO(uploaded.getvalue()))
+    try:
+        df_raw = cr.load_rows(io.BytesIO(uploaded.getvalue()))
+    except Exception as exc:  # surface bad/unexpected workbooks instead of halting silently
+        st.error(f"Couldn't read **{uploaded.name}**: {exc}")
+        st.stop()
     st.caption(f"Loaded {len(df_raw):,} rows from {uploaded.name}")
     if st.button("Classify reasons", type="primary"):
         st.session_state["classified"] = _classify_df(df_raw, model, limit=300 if quick else None)

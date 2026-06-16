@@ -85,7 +85,11 @@ def load_rows(path) -> pd.DataFrame:
                 sheets = [s]
                 break
     if not sheets:
-        raise SystemExit(f"No sheet with a reason column found in {path}")
+        raise ValueError(
+            "No sheet with a recognised reason column was found. "
+            f"Sheets in the file: {xl.sheet_names}. "
+            f"Looked for a column named one of: {REASON_CANDIDATES}."
+        )
 
     frames = []
     for s in sheets:
