@@ -38,7 +38,7 @@ from openpyxl.styles import Font, PatternFill
 import llm_classifier as llm
 from llm_classifier import ACCEPTABLE, NOT_ACCEPTABLE, POTENTIALLY_ACCEPTABLE
 
-DATA_SHEETS = ["UK Tax Year", "Calendar Tax Year"]
+DATA_SHEETS = ["UK Tax Year", "Calendar Tax Year", "UK", "International"]
 
 REASON_CANDIDATES = ["vcReason", "Trip Reason", "Reason", "Comments", "Driver Reason"]
 CLAIMED_CANDIDATES = ["BusinessMileage", "Claimed Miles", "Actual Miles"]
@@ -79,11 +79,11 @@ def load_rows(path) -> pd.DataFrame:
     xl = pd.ExcelFile(path)
     sheets = [s for s in DATA_SHEETS if s in xl.sheet_names]
     if not sheets:
-        # Fall back to the first sheet that has a reason column.
-        for s in xl.sheet_names:
-            if find_column(xl.parse(s, nrows=0).columns, REASON_CANDIDATES):
-                sheets = [s]
-                break
+        # Fall back to every sheet that has a reason column (don't stop at one).
+        sheets = [
+            s for s in xl.sheet_names
+            if find_column(xl.parse(s, nrows=0).columns, REASON_CANDIDATES)
+        ]
     if not sheets:
         raise ValueError(
             "No sheet with a recognised reason column was found. "
