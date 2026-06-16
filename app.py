@@ -160,14 +160,27 @@ def _classify_df(df: pd.DataFrame, model: str, limit: int | None):
         )
         st.stop()
 
-    try:
-        client = llm.make_client()
-        bar = st.progress(0.0, text="Classifying…")
-        results = llm.classify(
-            client, distinct, model=model,
-            on_progress=lambda d, t: bar.progress(d / t, text=f"Classifying… {d}/{t} batches"),
+    n_batches = (len(distinct) + llm.DEFAULT_BATCH_SIZE - 1) // llm.DEFAULT_BATCH_SIZE
+    if len(distinct) > 2000:
+        st.warning(
+            f"This will send **{len(distinct):,} distinct reasons** to the model "
+            f"(~{n_batches:,} batches) and may take a few minutes. To try it quickly "
+            "first, tick **Quick test** in the sidebar and re-run."
         )
-        bar.empty()
+
+    try:
+        with st.status(
+            f"Classifying {len(distinct):,} reasons in {n_batches:,} batches…",
+            expanded=True,
+        ) as status:
+            client = llm.make_client()
+            bar = st.progress(0.0, text="Starting…")
+            results = llm.classify(
+                client, distinct, model=model, max_workers=12,
+                on_progress=lambda d, t: bar.progress(
+                    d / t, text=f"{d}/{t} batches done"),
+            )
+            status.update(label=f"Classified {len(distinct):,} reasons.", state="complete")
     except Exception as exc:  # surface API/network errors instead of dying silently
         st.error(f"Classification failed: {exc}")
         st.stop()

@@ -109,7 +109,7 @@ class LLMResult:
 def make_client() -> OpenAI:
     key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not key:
-        raise SystemExit(
+        raise RuntimeError(
             "Set OPENROUTER_API_KEY (an sk-or-v1-... key from openrouter.ai/keys)."
         )
     return OpenAI(
