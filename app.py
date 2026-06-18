@@ -265,20 +265,27 @@ if uploaded is not None and "classified" not in st.session_state:
         st.stop()
     st.caption(f"Loaded {len(df_raw):,} rows from {uploaded.name}")
     if st.button("Classify reasons", type="primary"):
-        st.session_state["classified"] = _classify_df(df_raw, model, limit=300 if quick else None)
+        classified = _classify_df(df_raw, model, limit=300 if quick else None)
+        with st.spinner("Building the downloadable workbook…"):
+            st.session_state["xlsx"] = _to_xlsx_bytes(classified)
+        st.session_state["classified"] = classified
         st.rerun()
 
 # --- Results ----------------------------------------------------------------
-if "classified" in st.session_state:
+def _render_results():
     df = st.session_state["classified"]
     done = df[df["Classification"] != ""]
     total = len(done)
+    if total == 0:
+        st.warning("No rows were classified. Try re-running, or untick Quick test.")
+        return
 
     top = st.columns([3, 1])
     top[0].markdown("## Summary")
+    xlsx = st.session_state.get("xlsx") or _to_xlsx_bytes(df)
     top[1].download_button(
         "Download workbook",
-        data=_to_xlsx_bytes(df),
+        data=xlsx,
         file_name=st.session_state.get("file_name", "report").rsplit(".", 1)[0] + "_classified.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         width="stretch",
@@ -346,3 +353,11 @@ if "classified" in st.session_state:
         view[show], width="stretch", hide_index=True, height=440,
         column_config={k: v for k, v in COLUMN_CONFIG.items() if k in show},
     )
+
+
+if "classified" in st.session_state:
+    try:
+        _render_results()
+    except Exception as exc:  # never leave a blank page after a successful run
+        st.error(f"Couldn't render the report: {exc}")
+        st.exception(exc)
