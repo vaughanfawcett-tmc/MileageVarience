@@ -145,8 +145,15 @@ def _numbered(reasons: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _classify_chunk(client: OpenAI, reasons: list[str], model: str) -> list[LLMResult]:
-    """Classify one packed chunk. Returns results aligned to `reasons`."""
+def _classify_chunk(
+    client: OpenAI, reasons: list[str], model: str
+) -> tuple[list[LLMResult], str | None]:
+    """Classify one packed chunk.
+
+    Returns (results aligned to `reasons`, error message or None). On an API or
+    parse error the results are the fallback and the error string is returned so
+    the caller can surface it instead of silently substituting fallbacks.
+    """
     fallback = [
         LLMResult(POTENTIALLY_ACCEPTABLE, "Classification failed — manual review required")
         for _ in reasons
@@ -162,8 +169,8 @@ def _classify_chunk(client: OpenAI, reasons: list[str], model: str) -> list[LLMR
             ],
         )
         data = _parse_json(resp.choices[0].message.content)
-    except Exception:
-        return fallback
+    except Exception as exc:
+        return fallback, f"{type(exc).__name__}: {exc}"
 
     by_n: dict[int, LLMResult] = {}
     for item in data.get("results", []):
@@ -176,7 +183,7 @@ def _classify_chunk(client: OpenAI, reasons: list[str], model: str) -> list[LLMR
         except (KeyError, ValueError, TypeError, AttributeError):
             continue
 
-    return [by_n.get(i, fallback[i - 1]) for i in range(1, len(reasons) + 1)]
+    return [by_n.get(i, fallback[i - 1]) for i in range(1, len(reasons) + 1)], None
 
 
 def classify(
@@ -201,15 +208,32 @@ def classify(
     )
     results: list[LLMResult] = []
     done = 0
+    failed = 0
+    first_error: str | None = None
     start = time.monotonic()
     with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
-        for chunk_result in pool.map(
+        for chunk_result, error in pool.map(
             lambda c: _classify_chunk(client, c, model), chunks
         ):
             results.extend(chunk_result)
+            if error is not None:
+                failed += 1
+                if first_error is None:
+                    first_error = error
             done += 1
             if on_progress is not None:
                 on_progress(done, len(chunks))
             if done % 10 == 0 or done == len(chunks):
                 progress(f"  {done}/{len(chunks)} chunks ({time.monotonic()-start:.0f}s)")
+
+    # If every batch failed, the run is misconfigured (bad key, no credits,
+    # unknown model, …) — surface the real error instead of returning a sheet
+    # full of identical "Classification failed" fallbacks.
+    if failed == len(chunks) and first_error is not None:
+        raise RuntimeError(
+            f"All {len(chunks)} batches failed calling the model "
+            f"({model}). First error — {first_error}"
+        )
+    if failed:
+        progress(f"  WARNING: {failed}/{len(chunks)} batches failed — {first_error}")
     return results
