@@ -32,8 +32,6 @@ import re
 from pathlib import Path
 
 import pandas as pd
-from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill
 
 import llm_classifier as llm
 from llm_classifier import ACCEPTABLE, NOT_ACCEPTABLE, POTENTIALLY_ACCEPTABLE
@@ -46,13 +44,12 @@ EXPECTED_CANDIDATES = ["SystemCalculatedMileage", "Expected Miles", "Google Mile
 DECISION_CANDIDATES = ["Column1", "Decision", "Keep/Remove"]
 EXCLUDE_CANDIDATES = ["Excluded Parent Company"]
 
-FILL = {
-    ACCEPTABLE: PatternFill("solid", fgColor="C6EFCE"),
-    POTENTIALLY_ACCEPTABLE: PatternFill("solid", fgColor="FFEB9C"),
-    NOT_ACCEPTABLE: PatternFill("solid", fgColor="FFC7CE"),
+# Category -> cell background (xlsxwriter wants a plain hex string).
+CELL_HEX = {
+    ACCEPTABLE: "#C6EFCE",
+    POTENTIALLY_ACCEPTABLE: "#FFEB9C",
+    NOT_ACCEPTABLE: "#FFC7CE",
 }
-HEADER_FILL = PatternFill("solid", fgColor="305496")
-HEADER_FONT = Font(bold=True, color="FFFFFF")
 
 _XML_ARTIFACT = re.compile(r"_x000D_|\r")
 
@@ -196,24 +193,38 @@ def spot_check(df: pd.DataFrame, n: int):
 
 
 def write_workbook(df: pd.DataFrame, output: Path):
-    drop = [c for c in ("_reason", "_sheet") if c in df.columns]
-    df.drop(columns=drop).to_excel(output, index=False)
+    """Write the enriched workbook in one streaming pass.
 
-    wb = load_workbook(output)
-    ws = wb.active
-    for cell in ws[1]:
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-    headers = {cell.value: cell.column for cell in ws[1]}
-    cls_col = headers.get("Classification")
-    if cls_col:
-        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
-            fill = FILL.get(row[cls_col - 1].value)
-            if fill:
-                row[cls_col - 1].fill = fill
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = ws.dimensions
-    wb.save(output)
+    Uses xlsxwriter (single write, no reload) and a conditional-format rule per
+    category rather than a fill object per cell, so peak memory stays low enough
+    for a 512MB instance even on a 20k-row export.
+    """
+    drop = [c for c in ("_reason", "_sheet") if c in df.columns]
+    out = df.drop(columns=drop)
+    n_rows, n_cols = len(out), len(out.columns)
+
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        out.to_excel(writer, index=False, sheet_name="Classified")
+        wb, ws = writer.book, writer.sheets["Classified"]
+
+        header_fmt = wb.add_format(
+            {"bold": True, "font_color": "FFFFFF", "bg_color": "305496"}
+        )
+        for col_idx, name in enumerate(out.columns):
+            ws.write(0, col_idx, name, header_fmt)
+
+        ws.freeze_panes(1, 0)
+        if n_rows:
+            ws.autofilter(0, 0, n_rows, n_cols - 1)
+
+        if "Classification" in out.columns and n_rows:
+            ci = out.columns.get_loc("Classification")
+            for cat, hex_color in CELL_HEX.items():
+                ws.conditional_format(
+                    1, ci, n_rows, ci,
+                    {"type": "cell", "criteria": "==",
+                     "value": f'"{cat}"', "format": wb.add_format({"bg_color": hex_color})},
+                )
 
 
 def estimate(df: pd.DataFrame, args):

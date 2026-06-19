@@ -269,6 +269,7 @@ if uploaded is not None and "classified" not in st.session_state:
         with st.spinner("Building the downloadable workbook…"):
             st.session_state["xlsx"] = _to_xlsx_bytes(classified)
         st.session_state["classified"] = classified
+        _load_rows_cached.clear()  # free the cached raw parse; the dashboard only needs `classified`
         st.rerun()
 
 # --- Results ----------------------------------------------------------------
