@@ -14,6 +14,7 @@ or entered through the browser.
 
 from __future__ import annotations
 
+import gc
 import io
 import os
 import tempfile
@@ -266,10 +267,14 @@ if uploaded is not None and "classified" not in st.session_state:
     st.caption(f"Loaded {len(df_raw):,} rows from {uploaded.name}")
     if st.button("Classify reasons", type="primary"):
         classified = _classify_df(df_raw, model, limit=300 if quick else None)
+        # Free the raw parse (cache + local) BEFORE the memory-heavy workbook
+        # build, so the build has maximum headroom on a small instance.
+        del df_raw
+        _load_rows_cached.clear()
+        gc.collect()
         with st.spinner("Building the downloadable workbook…"):
             st.session_state["xlsx"] = _to_xlsx_bytes(classified)
         st.session_state["classified"] = classified
-        _load_rows_cached.clear()  # free the cached raw parse; the dashboard only needs `classified`
         st.rerun()
 
 # --- Results ----------------------------------------------------------------
