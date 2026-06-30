@@ -6,13 +6,21 @@ services:
   - type: web
     name: trip-reason-variance
     runtime: python
-    plan: free
+    # Starter (paid) is required for the persistent disk below and removes the
+    # free-tier idle spin-down. The disk holds the report history + stats DB.
+    plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: python -m streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    disk:
+      name: data
+      mountPath: /var/data        # DATA_DIR below points here; survives redeploys
+      sizeGB: 1
     envVars:
       - key: OPENROUTER_API_KEY      # your sk-or-v1-... key — set in the Render dashboard
         sync: false
       - key: APP_PASSWORD            # the password you share with Harris — set in the dashboard
         sync: false
+      - key: DATA_DIR                # where report history + the SQLite DB live
+        value: /var/data
       - key: PYTHON_VERSION
         value: "3.12.7"

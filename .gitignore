@@ -10,6 +10,11 @@ __pycache__/
 *.xls
 *.csv
 
+# Local report history store (the production copy lives on the Render disk).
+.data/
+*.db
+*.pkl.gz
+
 # Internal project brief
 TMC Project Brief*.md
 

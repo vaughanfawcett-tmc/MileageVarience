@@ -24,6 +24,7 @@ import pandas as pd
 import streamlit as st
 
 import classify_report as cr
+import history as hist
 import llm_classifier as llm
 from llm_classifier import ACCEPTABLE, NOT_ACCEPTABLE, POTENTIALLY_ACCEPTABLE
 
@@ -189,7 +190,7 @@ def _classify_df(df: pd.DataFrame, model: str, limit: int | None):
     by_reason = dict(zip(distinct, results))
     df["Classification"] = df["_reason"].map(lambda r: by_reason[r].category if r in by_reason else "")
     df["Rationale"] = df["_reason"].map(lambda r: by_reason[r].rationale if r in by_reason else "")
-    return df
+    return df, len(distinct), excluded
 
 
 @st.cache_data(show_spinner=False)
@@ -230,56 +231,37 @@ def bar_h(data: pd.DataFrame, cat_col: str, val_col: str, color_range, sort=None
     ).configure_axis(domain=False)
 
 
+def line_trend(data: pd.DataFrame, x_col: str, y_col: str, y_title: str, fmt: str):
+    base = alt.Chart(data).encode(
+        x=alt.X(f"{x_col}:T", title=None, axis=alt.Axis(labelColor=MUTED, ticks=False)),
+        y=alt.Y(f"{y_col}:Q", title=y_title,
+                axis=alt.Axis(labelColor=MUTED, titleColor=MUTED, grid=True, format=fmt)),
+    )
+    line = base.mark_line(color=ACCENT, strokeWidth=2)
+    pts = base.mark_point(color=ACCENT, filled=True, size=55)
+    return (line + pts).properties(height=240).configure_view(strokeWidth=0).configure_axis(domain=False)
+
+
 # --- Sidebar ----------------------------------------------------------------
 with st.sidebar:
-    st.markdown("### Settings")
-    model = st.selectbox(
-        "Model",
-        ["anthropic/claude-haiku-4.5", "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.8"],
-        help="Haiku is cheapest and usually sufficient. Sonnet / Opus for tougher cases.",
-    )
-    quick = st.checkbox("Quick test (~300-row sample)", value=False)
+    view = st.radio("View", ["New report", "History", "Dashboard"], label_visibility="collapsed")
     st.divider()
+    model = "anthropic/claude-haiku-4.5"
+    quick = False
+    if view == "New report":
+        st.markdown("### Settings")
+        model = st.selectbox(
+            "Model",
+            ["anthropic/claude-haiku-4.5", "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.8"],
+            help="Haiku is cheapest and usually sufficient. Sonnet / Opus for tougher cases.",
+        )
+        quick = st.checkbox("Quick test (~300-row sample)", value=False)
+        st.divider()
     st.caption("API key is read from the server environment and never shown in the browser.")
 
-# --- Upload / classify ------------------------------------------------------
-uploaded = st.file_uploader("Mileage Variance / Milcap export (.xlsx)", type="xlsx")
-
-if uploaded is not None and st.session_state.get("file_name") != uploaded.name:
-    st.session_state.pop("classified", None)
-    st.session_state["file_name"] = uploaded.name
-
-if uploaded is None and "classified" not in st.session_state:
-    st.markdown(
-        '<div class="empty">Upload a report to begin.<br>'
-        'You will get a category summary, a by-company breakdown, a filterable '
-        'flagged-trips table, and a downloadable enriched workbook.</div>',
-        unsafe_allow_html=True,
-    )
-
-if uploaded is not None and "classified" not in st.session_state:
-    try:
-        with st.spinner(f"Reading {uploaded.name}… large exports can take a few seconds."):
-            df_raw = _load_rows_cached(uploaded.getvalue())
-    except Exception as exc:  # surface bad/unexpected workbooks instead of halting silently
-        st.error(f"Couldn't read **{uploaded.name}**: {exc}")
-        st.stop()
-    st.caption(f"Loaded {len(df_raw):,} rows from {uploaded.name}")
-    if st.button("Classify reasons", type="primary"):
-        classified = _classify_df(df_raw, model, limit=300 if quick else None)
-        # Free the raw parse (cache + local) BEFORE the memory-heavy workbook
-        # build, so the build has maximum headroom on a small instance.
-        del df_raw
-        _load_rows_cached.clear()
-        gc.collect()
-        with st.spinner("Building the downloadable workbook…"):
-            st.session_state["xlsx"] = _to_xlsx_bytes(classified)
-        st.session_state["classified"] = classified
-        st.rerun()
 
 # --- Results ----------------------------------------------------------------
-def _render_results():
-    df = st.session_state["classified"]
+def _render_results(df: pd.DataFrame, xlsx: bytes | None, file_name: str):
     done = df[df["Classification"] != ""]
     total = len(done)
     if total == 0:
@@ -288,11 +270,11 @@ def _render_results():
 
     top = st.columns([3, 1])
     top[0].markdown("## Summary")
-    xlsx = st.session_state.get("xlsx") or _to_xlsx_bytes(df)
+    xlsx = xlsx or _to_xlsx_bytes(df)
     top[1].download_button(
         "Download workbook",
         data=xlsx,
-        file_name=st.session_state.get("file_name", "report").rsplit(".", 1)[0] + "_classified.xlsx",
+        file_name=(file_name or "report").rsplit(".", 1)[0] + "_classified.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         width="stretch",
     )
@@ -361,9 +343,187 @@ def _render_results():
     )
 
 
-if "classified" in st.session_state:
-    try:
-        _render_results()
-    except Exception as exc:  # never leave a blank page after a successful run
-        st.error(f"Couldn't render the report: {exc}")
-        st.exception(exc)
+def _new_report_view(model: str, quick: bool):
+    uploaded = st.file_uploader("Mileage Variance / Milcap export (.xlsx)", type="xlsx")
+
+    if uploaded is not None and st.session_state.get("file_name") != uploaded.name:
+        st.session_state.pop("classified", None)
+        st.session_state.pop("xlsx", None)
+        st.session_state["file_name"] = uploaded.name
+
+    if uploaded is None and "classified" not in st.session_state:
+        st.markdown(
+            '<div class="empty">Upload a report to begin.<br>'
+            'You will get a category summary, a by-company breakdown, a filterable '
+            'flagged-trips table, and a downloadable enriched workbook.<br>'
+            'Every run is saved to <b>History</b> and feeds the <b>Dashboard</b>.</div>',
+            unsafe_allow_html=True,
+        )
+
+    if uploaded is not None and "classified" not in st.session_state:
+        try:
+            with st.spinner(f"Reading {uploaded.name}… large exports can take a few seconds."):
+                df_raw = _load_rows_cached(uploaded.getvalue())
+        except Exception as exc:  # surface bad/unexpected workbooks instead of halting silently
+            st.error(f"Couldn't read **{uploaded.name}**: {exc}")
+            st.stop()
+        st.caption(f"Loaded {len(df_raw):,} rows from {uploaded.name}")
+        if st.button("Classify reasons", type="primary"):
+            classified, n_distinct, n_excluded = _classify_df(
+                df_raw, model, limit=300 if quick else None
+            )
+            # Free the raw parse (cache + local) BEFORE the memory-heavy workbook
+            # build, so the build has maximum headroom on a small instance.
+            del df_raw
+            _load_rows_cached.clear()
+            gc.collect()
+            with st.spinner("Building the downloadable workbook…"):
+                xlsx = _to_xlsx_bytes(classified)
+            with st.spinner("Saving to history…"):
+                try:
+                    hist.save_report(
+                        df=classified, xlsx_bytes=xlsx,
+                        file_name=st.session_state.get("file_name", "report"),
+                        model=model, quick_test=quick,
+                        distinct_reasons=n_distinct, excluded_rows=n_excluded,
+                    )
+                except Exception as exc:  # a storage hiccup must not lose the run
+                    st.warning(f"Report classified but couldn't be saved to history: {exc}")
+            st.session_state["xlsx"] = xlsx
+            st.session_state["classified"] = classified
+            st.rerun()
+
+    if "classified" in st.session_state:
+        try:
+            _render_results(
+                st.session_state["classified"],
+                st.session_state.get("xlsx"),
+                st.session_state.get("file_name", "report"),
+            )
+        except Exception as exc:  # never leave a blank page after a successful run
+            st.error(f"Couldn't render the report: {exc}")
+            st.exception(exc)
+
+
+def _history_view():
+    st.markdown("## Report history")
+    reports = hist.list_reports()
+    if reports.empty:
+        st.markdown(
+            '<div class="empty">No reports yet.<br>'
+            'Classify one from <b>New report</b> and it will appear here.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    disp = reports.copy()
+    disp["Date"] = pd.to_datetime(disp["created_at"]).dt.strftime("%Y-%m-%d %H:%M")
+    classified = disp["classified_rows"].replace(0, pd.NA)
+    disp["% Not Acc."] = (disp["n_not_acceptable"] / classified * 100).round(1)
+    disp["File"] = disp["file_name"].where(disp["quick_test"] == 0, disp["file_name"] + "  (quick test)")
+
+    table = disp[[
+        "Date", "File", "model", "classified_rows",
+        "n_acceptable", "n_potentially", "n_not_acceptable", "% Not Acc.",
+    ]]
+    st.dataframe(
+        table, width="stretch", hide_index=True,
+        column_config={
+            "model": st.column_config.TextColumn("Model"),
+            "classified_rows": st.column_config.NumberColumn("Trips", format="%d"),
+            "n_acceptable": st.column_config.NumberColumn("Acceptable", format="%d"),
+            "n_potentially": st.column_config.NumberColumn("Potentially", format="%d"),
+            "n_not_acceptable": st.column_config.NumberColumn("Not Acc.", format="%d"),
+            "% Not Acc.": st.column_config.NumberColumn("% Not Acc.", format="%.1f%%"),
+        },
+    )
+
+    labels = {
+        f"{row.Date} — {row.file_name} ({int(row.classified_rows):,} trips)": row.id
+        for row in disp.itertuples()
+    }
+    st.markdown("### Open a saved report")
+    pick = st.selectbox("Report", ["—"] + list(labels), label_visibility="collapsed")
+    if pick != "—":
+        rid = labels[pick]
+        c1, c2, c3 = st.columns([1, 1, 2])
+        if c1.button("Open report", type="primary"):
+            st.session_state["open_report_id"] = rid
+            st.rerun()
+        confirm = c3.checkbox("Confirm delete", key=f"del_{rid}")
+        if c2.button("Delete", disabled=not confirm):
+            hist.delete_report(rid)
+            if st.session_state.get("open_report_id") == rid:
+                st.session_state.pop("open_report_id", None)
+            st.rerun()
+
+    open_id = st.session_state.get("open_report_id")
+    if open_id and (reports["id"] == open_id).any():
+        file_name = reports.loc[reports["id"] == open_id, "file_name"].iloc[0]
+        st.divider()
+        try:
+            with st.spinner("Loading saved report…"):
+                df = hist.load_df(open_id)
+                xlsx = hist.load_xlsx(open_id)
+            _render_results(df, xlsx, file_name)
+        except Exception as exc:
+            st.error(f"Couldn't open that report: {exc}")
+
+
+def _dashboard_view():
+    st.markdown("## Dashboard")
+    reports = hist.list_reports()
+    if reports.empty:
+        st.markdown(
+            '<div class="empty">No data yet.<br>'
+            'Classify a report from <b>New report</b> to start tracking stats.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    n_reports = len(reports)
+    trips = int(reports["classified_rows"].sum())
+    tot = {
+        ACCEPTABLE: int(reports["n_acceptable"].sum()),
+        POTENTIALLY_ACCEPTABLE: int(reports["n_potentially"].sum()),
+        NOT_ACCEPTABLE: int(reports["n_not_acceptable"].sum()),
+    }
+    pct_na = tot[NOT_ACCEPTABLE] / trips * 100 if trips else 0
+    pct_ac = tot[ACCEPTABLE] / trips * 100 if trips else 0
+
+    cols = st.columns(4)
+    metric_card(cols[0], "Reports run", f"{n_reports:,}", ACCENT)
+    metric_card(cols[1], "Trips classified", f"{trips:,}", ACCENT)
+    metric_card(cols[2], "Acceptable", f"{pct_ac:.0f}%", COLOR[ACCEPTABLE])
+    metric_card(cols[3], "Not acceptable", f"{pct_na:.0f}%", COLOR[NOT_ACCEPTABLE])
+
+    st.markdown("## Overall category mix")
+    counts = pd.DataFrame({"Category": CATEGORIES, "Trips": [tot[c] for c in CATEGORIES]})
+    st.altair_chart(
+        bar_h(counts, "Category", "Trips", [COLOR[c] for c in CATEGORIES], sort=CATEGORIES),
+        use_container_width=True,
+    )
+
+    if n_reports >= 2:
+        trend = reports.sort_values("created_at").copy()
+        trend["When"] = pd.to_datetime(trend["created_at"])
+        denom = trend["classified_rows"].replace(0, pd.NA)
+        trend["% Not acceptable"] = (trend["n_not_acceptable"] / denom * 100).round(1)
+        st.markdown("## % Not acceptable over time")
+        st.altair_chart(
+            line_trend(trend, "When", "% Not acceptable", "% Not acceptable", ".0f"),
+            use_container_width=True,
+        )
+        st.markdown("## Trips classified per report")
+        st.altair_chart(
+            line_trend(trend, "When", "classified_rows", "Trips", ",.0f"),
+            use_container_width=True,
+        )
+
+
+if view == "New report":
+    _new_report_view(model, quick)
+elif view == "History":
+    _history_view()
+else:
+    _dashboard_view()

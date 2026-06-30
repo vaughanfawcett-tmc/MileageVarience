@@ -89,6 +89,25 @@ It opens at http://localhost:8501. Pick the model in the sidebar, or tick
 "Quick test" to classify a ~300-row sample first. Results are cached in the
 session, so filtering the table doesn't re-run (or re-bill) the classification.
 
+### History & dashboard
+
+The sidebar has three views:
+
+- **New report** — upload and classify (as above). Every run is saved.
+- **History** — every past run, newest first, with its stats. Open any saved
+  report to re-view the full summary/table and re-download its workbook, or
+  delete it.
+- **Dashboard** — aggregate stats across all runs: totals, overall category
+  mix, and trends (% Not acceptable and trips classified over time).
+
+Saved reports contain driver PII, so the store lives only on the
+password-gated server. It is written under `DATA_DIR` (default `/var/data`,
+the Render persistent disk; falls back to `./.data` locally):
+`history.db` (SQLite stats) plus `reports/<id>.xlsx` and `reports/<id>.pkl.gz`
+per run. Nothing here is ever committed (see `.gitignore`). On Render this
+needs a persistent disk, which requires the **Starter** plan or above (see
+`render.yaml`); the disk also removes the free-tier idle spin-down.
+
 ## Classification logic
 
 Precedence (highest wins):
@@ -122,5 +141,7 @@ open sample_milcap_report_classified.xlsx
 - `main.py` — CLI entry point, Excel I/O, colour formatting
 - `classifier.py` — rules-based classifier
 - `rules.yaml` — keywords + variance tolerance (editable by business users)
+- `app.py` — Streamlit dashboard (classify / history / stats)
+- `history.py` — persistent report history store (SQLite + files on disk)
 - `generate_sample.py` — produces a representative test workbook
-- `tests/test_classifier.py` — unit tests
+- `tests/test_classifier.py`, `tests/test_history.py` — unit tests
