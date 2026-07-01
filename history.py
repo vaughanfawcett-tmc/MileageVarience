@@ -10,15 +10,20 @@ Storage layout (under DATA_DIR — a Render persistent disk in production):
     DATA_DIR/reports/<id>.xlsx   - the enriched, downloadable workbook
     DATA_DIR/reports/<id>.pkl.gz - the classified DataFrame (gzip pickle)
 
-DATA_DIR defaults to /var/data (the disk mount) and falls back to ./.data for
-local development. Everything stored here can contain driver PII, so it lives
-only on the password-gated server and is never committed to the repo.
+DATA_DIR defaults to /var/data (the disk mount). If that isn't writable — e.g.
+the Render persistent disk isn't mounted (free tier, or the Starter blueprint
+hasn't synced yet) — we fall back to the first writable candidate so the app
+keeps working instead of crashing with PermissionError. On an ephemeral
+fallback the history simply doesn't survive restarts. Everything stored here can
+contain driver PII, so it lives only on the password-gated server and is never
+committed to the repo.
 """
 
 from __future__ import annotations
 
 import os
 import sqlite3
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,8 +50,50 @@ CREATE TABLE IF NOT EXISTS reports (
 """
 
 
+_resolved_dir: Path | None = None
+
+
+def _is_writable(path: Path) -> bool:
+    """True if we can create `path` and write a file inside it."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / f".write_test_{uuid.uuid4().hex[:8]}"
+        probe.write_text("ok")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def data_dir() -> Path:
-    return Path(os.environ.get("DATA_DIR", "/var/data"))
+    """First writable storage dir among the configured/default candidates.
+
+    Prefers DATA_DIR (the mounted disk in production) but falls back to a local
+    or temp dir if that mount is missing or read-only, so history never crashes
+    the app. The choice is cached for the process once resolved.
+    """
+    global _resolved_dir
+    if _resolved_dir is not None:
+        return _resolved_dir
+
+    candidates: list[Path] = []
+    env = os.environ.get("DATA_DIR")
+    if env:
+        candidates.append(Path(env))
+    candidates.append(Path("/var/data"))
+    candidates.append(Path.cwd() / ".data")
+    fallback = Path(tempfile.gettempdir()) / "trip_reason_variance"
+    candidates.append(fallback)
+
+    for candidate in candidates:
+        if _is_writable(candidate):
+            _resolved_dir = candidate
+            return candidate
+
+    # Nothing was writable (very unlikely); use the temp dir and let the real
+    # write surface its own error.
+    _resolved_dir = fallback
+    return fallback
 
 
 def _reports_dir() -> Path:
