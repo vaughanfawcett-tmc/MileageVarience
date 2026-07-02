@@ -32,6 +32,11 @@ CATEGORIES = [ACCEPTABLE, POTENTIALLY_ACCEPTABLE, NOT_ACCEPTABLE]
 COLOR = {ACCEPTABLE: "#16A34A", POTENTIALLY_ACCEPTABLE: "#D97706", NOT_ACCEPTABLE: "#DC2626"}
 INK, MUTED, LINE, ACCENT = "#111827", "#6B7280", "#E5E7EB", "#2563EB"
 
+# Direct link to the source workbook in SharePoint. Set the SHAREPOINT_URL env
+# var on the server (or paste the link below) to surface an "Open the source
+# workbook" button in the on-page process guide.
+SHAREPOINT_URL = os.environ.get("SHAREPOINT_URL", "")
+
 DISPLAY_COLS = [
     "Parent Name", "FirstName", "LastName", "vcReason", "Classification",
     "Rationale", "BusinessMileage", "SystemCalculatedMileage", "% Difference",
@@ -343,7 +348,41 @@ def _render_results(df: pd.DataFrame, xlsx: bytes | None, file_name: str):
     )
 
 
+def _process_guide():
+    """On-page 'how to prepare and run a report' guide for the team.
+
+    Expanded by default on a fresh page, collapsed once a report is loaded so it
+    stays available without getting in the way.
+    """
+    with st.expander(
+        "📋 How to prepare and run a report",
+        expanded="classified" not in st.session_state,
+    ):
+        if SHAREPOINT_URL:
+            st.link_button(
+                "Open the source workbook in SharePoint",
+                SHAREPOINT_URL,
+                type="primary",
+            )
+        st.markdown(
+            "1. **Open the source workbook** from SharePoint"
+            + (" (button above)." if SHAREPOINT_URL else ".") + "\n"
+            "2. Go to the **UK Tax Year** tab.\n"
+            "3. **Filter the _Date Entered_ column (Column K)** to the month you "
+            "want to process.\n"
+            "4. **Copy the filtered rows** and paste them into a **new Excel "
+            "workbook**.\n"
+            "5. **Save** the new workbook using one of these naming conventions:\n"
+            "   - `UK MV - [Month/Date]`\n"
+            "   - `International MV - [Month/Date]`\n"
+            "6. Back on this **Trip Reason Variance** page, **upload** the saved "
+            "workbook below.\n"
+            "7. Click **Classify reasons** to run the process."
+        )
+
+
 def _new_report_view(model: str, quick: bool):
+    _process_guide()
     uploaded = st.file_uploader("Mileage Variance / Milcap export (.xlsx)", type="xlsx")
 
     if uploaded is not None and st.session_state.get("file_name") != uploaded.name:
