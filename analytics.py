@@ -14,7 +14,7 @@ try:
 except Exception:  # posthog not installed yet -> tracking silently disabled
     Posthog = None
 
-_DEFAULT_KEY = "phc_sKVZdGbRuAsYc3syaFWWd7rV9K7GezJrYJFdi8mg4Mbe"  # public client key
+_DEFAULT_KEY = "phc_snvmegJQwrSSGtDNjQjjopUbbfuzhb4MnZuacx8F2hBb"  # public client key
 APP = os.environ.get("APP_ID", "CHANGE_ME")
 HOST = os.environ.get("POSTHOG_HOST", "https://eu.i.posthog.com")
 
