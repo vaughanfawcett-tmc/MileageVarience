@@ -57,6 +57,10 @@ COLUMN_CONFIG = {
 
 st.set_page_config(page_title="Trip Reason Variance", page_icon="📊", layout="wide")
 
+import analytics  # usage instrumentation (PostHog)
+analytics.APP = os.environ.get("APP_ID", "mileage-variance")
+analytics.page_open()
+
 st.markdown(
     """
     <style>

@@ -4,3 +4,4 @@ xlsxwriter>=3.2
 PyYAML>=6.0
 openai>=1.40
 streamlit>=1.49
+posthog>=7,<8
