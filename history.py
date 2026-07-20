@@ -30,8 +30,18 @@ from pathlib import Path
 
 import pandas as pd
 
-from llm_classifier import ACCEPTABLE, NOT_ACCEPTABLE, POTENTIALLY_ACCEPTABLE
+from llm_classifier import (
+    ACCEPTABLE,
+    DRIVER_GUIDANCE,
+    MANUAL_REVIEW,
+    NOT_ACCEPTABLE,
+    POTENTIALLY_ACCEPTABLE,
+)
 
+# n_potentially predates the July-2026 taxonomy change; it now holds the
+# "Manual Review Required" count (plus legacy "Potentially Acceptable" rows)
+# so old report rows stay comparable. n_guidance is the new
+# "Acceptable - Driver Guidance" count.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS reports (
     id               TEXT PRIMARY KEY,
@@ -44,6 +54,7 @@ CREATE TABLE IF NOT EXISTS reports (
     distinct_reasons INTEGER NOT NULL DEFAULT 0,
     excluded_rows    INTEGER NOT NULL DEFAULT 0,
     n_acceptable     INTEGER NOT NULL DEFAULT 0,
+    n_guidance       INTEGER NOT NULL DEFAULT 0,
     n_potentially    INTEGER NOT NULL DEFAULT 0,
     n_not_acceptable INTEGER NOT NULL DEFAULT 0
 );
@@ -117,6 +128,12 @@ def init() -> None:
     """Create the database + schema if they don't exist yet (idempotent)."""
     with _connect() as conn:
         conn.execute(_SCHEMA)
+        # Migrate pre-guidance databases in place.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(reports)")}
+        if "n_guidance" not in cols:
+            conn.execute(
+                "ALTER TABLE reports ADD COLUMN n_guidance INTEGER NOT NULL DEFAULT 0"
+            )
 
 
 def _xlsx_path(report_id: str) -> Path:
@@ -151,8 +168,8 @@ def save_report(
         conn.execute(
             "INSERT INTO reports (id, created_at, file_name, model, quick_test, "
             "total_rows, classified_rows, distinct_reasons, excluded_rows, "
-            "n_acceptable, n_potentially, n_not_acceptable) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "n_acceptable, n_guidance, n_potentially, n_not_acceptable) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 report_id,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -164,7 +181,9 @@ def save_report(
                 int(distinct_reasons),
                 int(excluded_rows),
                 int(counts.get(ACCEPTABLE, 0)),
-                int(counts.get(POTENTIALLY_ACCEPTABLE, 0)),
+                int(counts.get(DRIVER_GUIDANCE, 0)),
+                int(counts.get(MANUAL_REVIEW, 0))
+                + int(counts.get(POTENTIALLY_ACCEPTABLE, 0)),
                 int(counts.get(NOT_ACCEPTABLE, 0)),
             ),
         )

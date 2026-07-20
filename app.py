@@ -26,10 +26,15 @@ import streamlit as st
 import classify_report as cr
 import history as hist
 import llm_classifier as llm
-from llm_classifier import ACCEPTABLE, NOT_ACCEPTABLE, POTENTIALLY_ACCEPTABLE
+from llm_classifier import ACCEPTABLE, DRIVER_GUIDANCE, MANUAL_REVIEW, NOT_ACCEPTABLE
 
-CATEGORIES = [ACCEPTABLE, POTENTIALLY_ACCEPTABLE, NOT_ACCEPTABLE]
-COLOR = {ACCEPTABLE: "#16A34A", POTENTIALLY_ACCEPTABLE: "#D97706", NOT_ACCEPTABLE: "#DC2626"}
+CATEGORIES = [ACCEPTABLE, DRIVER_GUIDANCE, MANUAL_REVIEW, NOT_ACCEPTABLE]
+COLOR = {
+    ACCEPTABLE: "#16A34A",
+    DRIVER_GUIDANCE: "#2563EB",
+    MANUAL_REVIEW: "#D97706",
+    NOT_ACCEPTABLE: "#DC2626",
+}
 INK, MUTED, LINE, ACCENT = "#111827", "#6B7280", "#E5E7EB", "#2563EB"
 
 # Direct link to the source workbook in SharePoint. Set the SHAREPOINT_URL env
@@ -39,8 +44,8 @@ SHAREPOINT_URL = os.environ.get("SHAREPOINT_URL", "")
 
 DISPLAY_COLS = [
     "Parent Name", "FirstName", "LastName", "vcReason", "Classification",
-    "Rationale", "BusinessMileage", "SystemCalculatedMileage", "% Difference",
-    "Column1",
+    "Rationale", "BusinessMileage", "SystemCalculatedMileage", "Variance %",
+    "% Difference", "Column1",
 ]
 COLUMN_CONFIG = {
     "Parent Name": st.column_config.TextColumn("Company"),
@@ -51,6 +56,7 @@ COLUMN_CONFIG = {
     "Rationale": st.column_config.TextColumn("Rationale", width="large"),
     "BusinessMileage": st.column_config.NumberColumn("Claimed", format="%.0f"),
     "SystemCalculatedMileage": st.column_config.NumberColumn("System", format="%.0f"),
+    "Variance %": st.column_config.NumberColumn("Var %", format="%.1f%%"),
     "% Difference": st.column_config.NumberColumn("Variance", format="%.2f"),
     "Column1": st.column_config.TextColumn("Existing", width="small"),
 }
@@ -123,7 +129,7 @@ if not _check_password():
 st.markdown(
     '<p class="app-title">Trip Reason Variance</p>'
     '<p class="app-sub">HMRC review assistant — classify driver mileage reasons as '
-    'Acceptable, Potentially Acceptable, or Not Acceptable.</p>'
+    'Acceptable, Acceptable - Driver Guidance, Manual Review Required, or Not Acceptable.</p>'
     '<div class="rule"></div>',
     unsafe_allow_html=True,
 )
@@ -199,6 +205,8 @@ def _classify_df(df: pd.DataFrame, model: str, limit: int | None):
     by_reason = dict(zip(distinct, results))
     df["Classification"] = df["_reason"].map(lambda r: by_reason[r].category if r in by_reason else "")
     df["Rationale"] = df["_reason"].map(lambda r: by_reason[r].rationale if r in by_reason else "")
+    cr.add_variance_pct(df)
+    cr.apply_variance_review(df)
     return df, len(distinct), excluded
 
 
@@ -288,11 +296,21 @@ def _render_results(df: pd.DataFrame, xlsx: bytes | None, file_name: str):
         width="stretch",
     )
 
-    cols = st.columns(3)
+    cols = st.columns(len(CATEGORIES))
     for col, cat in zip(cols, CATEGORIES):
         n = int((done["Classification"] == cat).sum())
         pct = f"{n / total * 100:.0f}% of {total:,} trips" if total else ""
         metric_card(col, cat, f"{n:,}", COLOR[cat], pct)
+
+    if "Variance %" in done.columns:
+        n_high = int(done["Variance %"].gt(cr.HIGH_VARIANCE_PCT).sum())
+        if n_high:
+            st.warning(
+                f"**{n_high:,} trips are more than {cr.HIGH_VARIANCE_PCT:.0f}% over** the "
+                "system-calculated distance. They are classified Manual Review Required "
+                "here and collected on the *High Variance 50%+* sheet at the front of "
+                "the downloadable workbook."
+            )
 
     counts = (done["Classification"].value_counts().reindex(CATEGORIES).fillna(0)
               .rename_axis("Category").reset_index(name="Trips"))
@@ -333,7 +351,10 @@ def _render_results(df: pd.DataFrame, xlsx: bytes | None, file_name: str):
 
     st.markdown("## Flagged trips")
     f1, f2 = st.columns([1, 2])
-    pick = f1.multiselect("Classification", CATEGORIES, default=[NOT_ACCEPTABLE])
+    pick = f1.multiselect(
+        "Classification", CATEGORIES,
+        default=[DRIVER_GUIDANCE, MANUAL_REVIEW, NOT_ACCEPTABLE],
+    )
     companies = sorted(done[pc].dropna().astype(str).unique()) if pc else []
     chosen = f2.multiselect("Company (blank = all)", companies)
     search = st.text_input("Search reason text", placeholder="e.g. school, satnav, tupe…")
@@ -469,7 +490,7 @@ def _history_view():
 
     table = disp[[
         "Date", "File", "model", "classified_rows",
-        "n_acceptable", "n_potentially", "n_not_acceptable", "% Not Acc.",
+        "n_acceptable", "n_guidance", "n_potentially", "n_not_acceptable", "% Not Acc.",
     ]]
     st.dataframe(
         table, width="stretch", hide_index=True,
@@ -477,7 +498,8 @@ def _history_view():
             "model": st.column_config.TextColumn("Model"),
             "classified_rows": st.column_config.NumberColumn("Trips", format="%d"),
             "n_acceptable": st.column_config.NumberColumn("Acceptable", format="%d"),
-            "n_potentially": st.column_config.NumberColumn("Potentially", format="%d"),
+            "n_guidance": st.column_config.NumberColumn("Guidance", format="%d"),
+            "n_potentially": st.column_config.NumberColumn("Review", format="%d"),
             "n_not_acceptable": st.column_config.NumberColumn("Not Acc.", format="%d"),
             "% Not Acc.": st.column_config.NumberColumn("% Not Acc.", format="%.1f%%"),
         },
@@ -530,7 +552,8 @@ def _dashboard_view():
     trips = int(reports["classified_rows"].sum())
     tot = {
         ACCEPTABLE: int(reports["n_acceptable"].sum()),
-        POTENTIALLY_ACCEPTABLE: int(reports["n_potentially"].sum()),
+        DRIVER_GUIDANCE: int(reports["n_guidance"].sum()),
+        MANUAL_REVIEW: int(reports["n_potentially"].sum()),
         NOT_ACCEPTABLE: int(reports["n_not_acceptable"].sum()),
     }
     pct_na = tot[NOT_ACCEPTABLE] / trips * 100 if trips else 0

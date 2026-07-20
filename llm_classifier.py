@@ -2,8 +2,10 @@
 
 Classifies free-text trip reasons — including messy abbreviations, route
 descriptions, and non-English text (French / German / Italian / Bulgarian) —
-into Acceptable / Potentially Acceptable / Not Acceptable, with a short
-rationale.
+into Acceptable / Acceptable - Driver Guidance / Manual Review Required /
+Not Acceptable, with a short rationale. Two assessments drive the call: does
+the reason explain the variance, and does it reveal the journey was logged
+incorrectly (an unlogged extra stop or return leg → Driver Guidance).
 
 Cost-efficient design:
   - The HMRC rubric is the (stable) system prompt.
@@ -32,9 +34,12 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 ACCEPTABLE = "Acceptable"
-POTENTIALLY_ACCEPTABLE = "Potentially Acceptable"
+DRIVER_GUIDANCE = "Acceptable - Driver Guidance"
+MANUAL_REVIEW = "Manual Review Required"
 NOT_ACCEPTABLE = "Not Acceptable"
-_VALID = {ACCEPTABLE, POTENTIALLY_ACCEPTABLE, NOT_ACCEPTABLE}
+# Legacy name (pre-July-2026 taxonomy); old saved reports may still contain it.
+POTENTIALLY_ACCEPTABLE = "Potentially Acceptable"
+_VALID = {ACCEPTABLE, DRIVER_GUIDANCE, MANUAL_REVIEW, NOT_ACCEPTABLE}
 
 DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
 DEFAULT_BATCH_SIZE = 40
@@ -48,56 +53,88 @@ You are an HMRC compliance assistant for a UK fleet/mileage team (TMC).
 Drivers claim business mileage. A system (Google/Waze-based) calculates an
 expected distance for each trip. When the claimed distance materially exceeds
 the calculated distance, the driver enters a free-text reason explaining the
-excess. Your job is to classify how acceptable that *reason* is as a
-justification for the extra mileage, from an HMRC business-mileage standpoint.
+excess. Make TWO separate assessments of each reason:
 
-Classify into exactly one of three categories:
+  Assessment 1 — Does the reason explain the mileage variance?
+  Assessment 2 — Does the reason reveal that the journey was LOGGED
+                 INCORRECTLY (an additional destination was visited but not
+                 recorded as its own trip leg)?
 
-ACCEPTABLE — A clear, specific, business-legitimate explanation for the excess
-that aligns with HMRC rules. For example:
-  - Diversions: roadworks, road/bridge/motorway closure, accident, police
-    diversion, flooding, traffic congestion forcing a longer route.
-  - Multiple business stops: multi-drop, several deliveries/collections,
-    visiting multiple sites/customers on one trip.
-  - Return journey explicitly accounted for (system calculated one-way only),
-    where the maths is stated and consistent.
-  - Genuine business detours: customer/client/site/depot visits where the
-    longer route is explained, vehicle breakdown, emergency call-out.
+A reason can explain the variance perfectly well AND still reveal a logging
+error — that combination is exactly what the review team needs surfaced.
 
-POTENTIALLY ACCEPTABLE — Plausibly valid but lacking detail, or requiring
-human/HR verification before approval. For example:
-  - Vague route justifications: "used main roads", "quickest route not the
-    shortest", "followed satnav/GPS", "took the A23", "longer route".
-  - Bare assertions that don't explain the excess: "as per vehicle odometer",
-    "this is the distance shown on Google", figures restated without cause.
-  - Employment-terms / contractual claims: TUPE transfers, "paid full mileage
-    per my terms", missing-postcode or missing-trip complaints — real issues
-    that need payroll/HR to verify, not a driving-distance reason.
-  - Generic business words with no detail: "meeting", "business", "work",
-    "visit", "appointment", "fieldwork".
+Classify into exactly one of four categories:
 
-NOT ACCEPTABLE — Clearly invalid, personal, or no meaningful reason:
-  - Personal trips: shopping, gym, pub, social, holiday, school run, dropping
-    or collecting family, personal appointments, going home for lunch.
-  - Ordinary commuting (home to work and back) — not allowable business
-    mileage under HMRC rules, even if phrased neutrally.
-  - Blank, "n/a", "none", "?", "don't know", or otherwise empty/meaningless.
+ACCEPTABLE — variance explained, no logging issue. Route choice and honest
+measurement are FINE — the system calculates at a different time of day, so a
+different route or a tracked/odometer distance legitimately differs:
+  - Route/navigation: "Google Maps", "sat nav", "followed satnav all day",
+    "best/fastest/quickest route", "avoided tolls", "HOME VIA M25",
+    "A3 is a quicker route", named roads/motorways, "motorway not A-roads".
+  - Measurement: "auto track", "as per tracker/telematics/odometer/tripmeter",
+    "app tracking", "that's what the car said", tracker/app left running or
+    not stopped, "checked on Google and it's right".
+  - Conditions: traffic, congestion, road closure, accident, diversion,
+    roadworks, weather — where no extra destination is mentioned.
+  - Operational micro-stops that are not a real destination: fuel stop,
+    EV charge, toilet/comfort break, quick drink, parking further away.
+  - Couldn't-log situations: aborted/cancelled visit (customer left, no
+    access), called away mid-route — no waypoint existed to log.
+Do NOT mark these down for being brief or vague ("Google maps", "Auto track",
+"Best route" alone are all Acceptable). Brevity is not a defect.
+
+ACCEPTABLE - DRIVER GUIDANCE — variance explained, BUT the wording reveals an
+additional business location or journey leg that was not logged separately.
+The driver should be advised to log each leg (Office → Colleague → Customer,
+not Office → Customer). Trigger on any additional-destination language:
+  - Picked up / dropped off a colleague, staff, escort, passenger
+    ("Dropped and picked up colleague Jason", "Colleague collection:
+    Bristol Airport", "picked up Simon from Andover").
+  - Collected / delivered / dropped parts, tools, equipment, stock, keys,
+    materials ("Pick up parts", "diversion to Screwfix for parts",
+    "stock drop off", "via B&Q for work equipment").
+  - Called into / went via another site, office, depot, branch, warehouse,
+    customer, supplier, hotel, airport, station, storage unit.
+  - Return journey folded into one logged trip: "12.2 miles there and 12.2
+    back", "inc return journey", "round trip", "7 miles then returned = 14"
+    — the return leg must be logged as its own trip.
+  - Multiple postcodes/segments listed in the reason instead of logged as
+    separate trips ("ran out of space on my grid" for extra postcodes).
+
+MANUAL REVIEW REQUIRED — a human must look before any driver contact:
+  - Garage road test, vehicle testing/repair mileage, demonstration drives —
+    the customer contact must decide whether it counts as business.
+  - Missing, unreadable, or genuinely ambiguous explanations that could be
+    acceptable or not depending on account details.
+  - Obscenities or abuse in the reason (needs escalation to the contact).
+  - Employment-terms / contractual disputes (TUPE, "paid full mileage per my
+    terms", missing-postcode system complaints) — payroll/HR territory.
+
+NOT ACCEPTABLE — the reason itself shows non-business mileage or says nothing:
+  - Personal trips: shopping, gym, pub, social, holiday, school run,
+    dropping/collecting family, personal appointments, home for lunch.
+  - Ordinary commuting (home to work and back) claimed as business.
+  - Blank, "n/a", "none", "?", "don't know", or otherwise meaningless.
 
 Guidance:
+  - Judge the EXPLANATION, not the journey type or how polished the text is.
   - The reason may be in any language. Translate and judge it on its meaning.
-  - Ignore artifacts like "_x000D_" (stray carriage returns) and typos.
-  - Be conservative: if a reason could be legitimate but you cannot confirm a
-    concrete business cause for the extra distance, use POTENTIALLY ACCEPTABLE
-    rather than ACCEPTABLE.
+  - Ignore artifacts like "_x000D_" (stray carriage returns) and typos
+    ("fastist route", "follow sst bav" = followed sat nav).
+  - The deciding question between ACCEPTABLE and DRIVER GUIDANCE: did the
+    driver mention going SOMEWHERE ELSE that isn't logged? Different route or
+    measurement source → Acceptable. Extra place, person, pickup, delivery,
+    or an unlogged return leg → Driver Guidance.
   - You are an aid to a human reviewer (Amy), not the final decision. Each
-    rationale must be ONE short sentence a reviewer can act on quickly.
+    rationale must be ONE short sentence a reviewer can act on quickly; for
+    Driver Guidance say what should have been logged.
 
 You will be given a numbered list of trip reasons. Classify every one.
 Respond with a single JSON object and nothing else, of the form:
 {"results": [{"n": 1, "category": "Acceptable", "rationale": "..."}, ...]}
 where "n" matches the reason's number, "category" is exactly one of
-"Acceptable", "Potentially Acceptable", or "Not Acceptable", and there is one
-entry for every reason in the list."""
+"Acceptable", "Acceptable - Driver Guidance", "Manual Review Required", or
+"Not Acceptable", and there is one entry for every reason in the list."""
 
 
 @dataclass
@@ -155,13 +192,13 @@ def _classify_chunk(
     the caller can surface it instead of silently substituting fallbacks.
     """
     fallback = [
-        LLMResult(POTENTIALLY_ACCEPTABLE, "Classification failed — manual review required")
+        LLMResult(MANUAL_REVIEW, "Classification failed — manual review required")
         for _ in reasons
     ]
     try:
         resp = client.chat.completions.create(
             model=model,
-            max_tokens=80 * len(reasons) + 200,
+            max_tokens=100 * len(reasons) + 300,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": RUBRIC},
@@ -177,8 +214,10 @@ def _classify_chunk(
         try:
             n = int(item["n"])
             cat = item["category"].strip()
+            if cat == POTENTIALLY_ACCEPTABLE:  # model slipped into the old taxonomy
+                cat = MANUAL_REVIEW
             if cat not in _VALID:
-                cat = POTENTIALLY_ACCEPTABLE
+                cat = MANUAL_REVIEW
             by_n[n] = LLMResult(cat, str(item.get("rationale", "")).strip())
         except (KeyError, ValueError, TypeError, AttributeError):
             continue

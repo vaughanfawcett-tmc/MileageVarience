@@ -34,7 +34,7 @@ from pathlib import Path
 import pandas as pd
 
 import llm_classifier as llm
-from llm_classifier import ACCEPTABLE, NOT_ACCEPTABLE, POTENTIALLY_ACCEPTABLE
+from llm_classifier import ACCEPTABLE, DRIVER_GUIDANCE, MANUAL_REVIEW, NOT_ACCEPTABLE
 
 DATA_SHEETS = ["UK Tax Year", "Calendar Tax Year", "UK", "International"]
 
@@ -44,10 +44,16 @@ EXPECTED_CANDIDATES = ["SystemCalculatedMileage", "Expected Miles", "Google Mile
 DECISION_CANDIDATES = ["Column1", "Decision", "Keep/Remove"]
 EXCLUDE_CANDIDATES = ["Excluded Parent Company"]
 
+# Any variance above this share of the system-calculated distance gets bumped
+# to Manual Review even when the reason itself reads fine — big gaps are
+# usually missing journey legs or logging faults (Amy, July 2026).
+HIGH_VARIANCE_PCT = 50.0
+
 # Category -> cell background (xlsxwriter wants a plain hex string).
 CELL_HEX = {
     ACCEPTABLE: "#C6EFCE",
-    POTENTIALLY_ACCEPTABLE: "#FFEB9C",
+    DRIVER_GUIDANCE: "#BDD7EE",
+    MANUAL_REVIEW: "#FFEB9C",
     NOT_ACCEPTABLE: "#FFC7CE",
 }
 
@@ -66,6 +72,47 @@ def normalise_reason(value) -> str:
     if value is None or (isinstance(value, float) and value != value):
         return ""
     return _XML_ARTIFACT.sub(" ", str(value)).strip()
+
+
+def add_variance_pct(df: pd.DataFrame) -> str | None:
+    """Add a per-trip "Variance %" column (claimed excess over the system
+    distance). Returns the column name, or None if the mileage columns are
+    missing. Amy filters on the reason text alone and never sees the size of
+    the difference — this puts it on every row.
+    """
+    claimed_col = find_column(df.columns, CLAIMED_CANDIDATES)
+    expected_col = find_column(df.columns, EXPECTED_CANDIDATES)
+    if claimed_col is None or expected_col is None:
+        return None
+    claimed = pd.to_numeric(df[claimed_col], errors="coerce")
+    expected = pd.to_numeric(df[expected_col], errors="coerce")
+    pct = (claimed - expected) / expected.where(expected > 0) * 100
+    df["Variance %"] = pct.round(1)
+    return "Variance %"
+
+
+def apply_variance_review(df: pd.DataFrame) -> int:
+    """Bump acceptable-looking rows with a huge variance to Manual Review.
+
+    An otherwise-fine reason ("Google Maps") does not explain being 50%+ over
+    the calculated distance — those need a trip check. Returns how many rows
+    were bumped.
+    """
+    if "Variance %" not in df.columns or "Classification" not in df.columns:
+        return 0
+    mask = (
+        df["Variance %"].gt(HIGH_VARIANCE_PCT)
+        & df["Classification"].isin([ACCEPTABLE, DRIVER_GUIDANCE])
+    )
+    if not mask.any():
+        return 0
+    df.loc[mask, "Rationale"] = (
+        "Variance is over " + df.loc[mask, "Variance %"].map("{:.0f}%".format)
+        + " of the calculated distance — trip check needed. ("
+        + df.loc[mask, "Rationale"].astype(str) + ")"
+    )
+    df.loc[mask, "Classification"] = MANUAL_REVIEW
+    return int(mask.sum())
 
 
 def load_rows(path) -> pd.DataFrame:
@@ -136,6 +183,10 @@ def classify(df: pd.DataFrame, args) -> dict:
     df["Rationale"] = df["_reason"].map(
         lambda r: by_reason[r].rationale if r in by_reason else ""
     )
+    add_variance_pct(df)
+    bumped = apply_variance_review(df)
+    if bumped:
+        print(f"{bumped} rows bumped to {MANUAL_REVIEW} (variance > {HIGH_VARIANCE_PCT:.0f}%)")
     return {"reason_col": reason_col, "classified": work, "df": df}
 
 
@@ -167,7 +218,7 @@ def spot_check(df: pd.DataFrame, n: int):
     if classified.empty:
         return
     decision_col = find_column(df.columns, DECISION_CANDIDATES)
-    cats = [ACCEPTABLE, POTENTIALLY_ACCEPTABLE, NOT_ACCEPTABLE]
+    cats = [ACCEPTABLE, DRIVER_GUIDANCE, MANUAL_REVIEW, NOT_ACCEPTABLE]
     per = max(1, n // len(cats))
 
     picks = []
@@ -198,33 +249,53 @@ def write_workbook(df: pd.DataFrame, output: Path):
     Uses xlsxwriter (single write, no reload) and a conditional-format rule per
     category rather than a fill object per cell, so peak memory stays low enough
     for a 512MB instance even on a 20k-row export.
+
+    A "High Variance 50%+" sheet goes FIRST so the worst offenders are the
+    first thing the reviewer sees, followed by the full "Classified" sheet.
     """
     drop = [c for c in ("_reason", "_sheet") if c in df.columns]
     out = df.drop(columns=drop)
-    n_rows, n_cols = len(out), len(out.columns)
+    # The raw export embeds Excel CR artifacts ("_x000D_") in the reason text;
+    # write the cleaned text so they don't leak into the reviewed file.
+    reason_col = find_column(out.columns, REASON_CANDIDATES)
+    if reason_col is not None:
+        out[reason_col] = out[reason_col].map(normalise_reason)
 
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        out.to_excel(writer, index=False, sheet_name="Classified")
-        wb, ws = writer.book, writer.sheets["Classified"]
+    high = None
+    if "Variance %" in out.columns:
+        high = (out[out["Variance %"].gt(HIGH_VARIANCE_PCT)]
+                .sort_values("Variance %", ascending=False))
+        if high.empty:
+            high = None
+
+    def _write_sheet(writer, frame: pd.DataFrame, sheet: str):
+        frame.to_excel(writer, index=False, sheet_name=sheet)
+        wb, ws = writer.book, writer.sheets[sheet]
+        n_rows, n_cols = len(frame), len(frame.columns)
 
         header_fmt = wb.add_format(
             {"bold": True, "font_color": "FFFFFF", "bg_color": "305496"}
         )
-        for col_idx, name in enumerate(out.columns):
+        for col_idx, name in enumerate(frame.columns):
             ws.write(0, col_idx, name, header_fmt)
 
         ws.freeze_panes(1, 0)
         if n_rows:
             ws.autofilter(0, 0, n_rows, n_cols - 1)
 
-        if "Classification" in out.columns and n_rows:
-            ci = out.columns.get_loc("Classification")
+        if "Classification" in frame.columns and n_rows:
+            ci = frame.columns.get_loc("Classification")
             for cat, hex_color in CELL_HEX.items():
                 ws.conditional_format(
                     1, ci, n_rows, ci,
                     {"type": "cell", "criteria": "==",
                      "value": f'"{cat}"', "format": wb.add_format({"bg_color": hex_color})},
                 )
+
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        if high is not None:
+            _write_sheet(writer, high, "High Variance 50%+")
+        _write_sheet(writer, out, "Classified")
 
 
 def estimate(df: pd.DataFrame, args):
@@ -280,7 +351,7 @@ def main():
 
     classified = df[df["Classification"] != ""]
     print("\nClassification summary:")
-    for cat in (ACCEPTABLE, POTENTIALLY_ACCEPTABLE, NOT_ACCEPTABLE):
+    for cat in (ACCEPTABLE, DRIVER_GUIDANCE, MANUAL_REVIEW, NOT_ACCEPTABLE):
         print(f"  {cat:24} {int((classified['Classification'] == cat).sum()):>6}")
 
     validate_against_decision(df)

@@ -1,8 +1,26 @@
 # TMC Trip Reason Variance Automation
 
 Classifies free-text trip reasons from Milcap (and the standard Trip Purpose report) into
-**Acceptable / Potentially Acceptable / Not Acceptable** to reduce manual review effort
-and improve HMRC-audit consistency.
+**Acceptable / Acceptable - Driver Guidance / Manual Review Required / Not Acceptable**
+to reduce manual review effort and improve HMRC-audit consistency.
+
+The classifier makes two assessments per reason (July 2026 rework, from Amy's
+feedback):
+
+1. **Does the reason explain the mileage variance?** Route choice and honest
+   measurement (Google Maps, sat nav, auto track, odometer, avoiding tolls,
+   "home via M25") are acceptable — the system calculates at a different time
+   of day, so routes legitimately differ.
+2. **Does it reveal the journey was logged incorrectly?** Wording that shows an
+   extra unlogged destination (picked up a colleague, collected parts, went via
+   a depot, a return leg folded into one trip) is still an explained variance,
+   but the driver needs guidance to log each leg separately →
+   `Acceptable - Driver Guidance`.
+
+Garage road tests, ambiguous text, and disputes go to `Manual Review Required`.
+Any trip more than **50% over** the calculated distance is bumped to Manual
+Review regardless of the reason, and collected on a `High Variance 50%+` sheet
+at the front of the output workbook.
 
 ## Setup
 
@@ -67,9 +85,10 @@ python classify_report.py "Mileage Variance Last 30 Days v2.xlsx" \
 `classify_report.py` reads the real schema (`vcReason`, `BusinessMileage`,
 `SystemCalculatedMileage`, the two tax-year sheets), de-duplicates reason
 strings, packs ~40 reasons per request (amortising the rubric — see
-`--batch-size`/`--workers`), writes an enriched colour-coded workbook, and
-compares the 3-way classification against the existing `Column1` keep/remove
-decision. The HMRC rubric lives in `llm_classifier.py`. Model slugs are
+`--batch-size`/`--workers`), adds a per-trip `Variance %` column, writes an
+enriched colour-coded workbook (cleaning `_x000D_` artifacts out of the reason
+text), and compares the classification against the existing `Column1`
+keep/remove decision. The HMRC rubric lives in `llm_classifier.py`. Model slugs are
 OpenRouter's (`anthropic/claude-haiku-4.5`, `anthropic/claude-sonnet-4.6`,
 `anthropic/claude-opus-4.8`, or any OpenRouter chat model).
 

@@ -8,7 +8,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from llm_classifier import ACCEPTABLE, NOT_ACCEPTABLE, POTENTIALLY_ACCEPTABLE
+from llm_classifier import ACCEPTABLE, DRIVER_GUIDANCE, MANUAL_REVIEW, NOT_ACCEPTABLE
 
 
 def _hist(tmp_path, monkeypatch):
@@ -21,11 +21,11 @@ def _hist(tmp_path, monkeypatch):
 def _frame():
     return pd.DataFrame(
         {
-            "Parent Name": ["Acme", "Acme", "Beta"],
-            "vcReason": ["client meeting", "personal trip", "site visit"],
-            "_reason": ["client meeting", "personal trip", "site visit"],
-            "Classification": [ACCEPTABLE, NOT_ACCEPTABLE, POTENTIALLY_ACCEPTABLE],
-            "Rationale": ["ok", "personal", "vague"],
+            "Parent Name": ["Acme", "Acme", "Beta", "Beta"],
+            "vcReason": ["google maps", "personal trip", "garage road test", "pick up parts"],
+            "_reason": ["google maps", "personal trip", "garage road test", "pick up parts"],
+            "Classification": [ACCEPTABLE, NOT_ACCEPTABLE, MANUAL_REVIEW, DRIVER_GUIDANCE],
+            "Rationale": ["route choice", "personal", "customer contact to decide", "unlogged stop"],
         }
     )
 
@@ -35,7 +35,7 @@ def test_save_then_load_round_trip(tmp_path, monkeypatch):
     rid = hist.save_report(
         df=_frame(), xlsx_bytes=b"PK\x03\x04 fake xlsx",
         file_name="report.xlsx", model="anthropic/claude-haiku-4.5",
-        quick_test=True, distinct_reasons=3, excluded_rows=1,
+        quick_test=True, distinct_reasons=4, excluded_rows=1,
     )
 
     reports = hist.list_reports()
@@ -43,15 +43,18 @@ def test_save_then_load_round_trip(tmp_path, monkeypatch):
     row = reports.iloc[0]
     assert row["id"] == rid
     assert row["file_name"] == "report.xlsx"
-    assert row["classified_rows"] == 3
+    assert row["classified_rows"] == 4
     assert row["n_acceptable"] == 1
     assert row["n_not_acceptable"] == 1
+    assert row["n_guidance"] == 1
     assert row["n_potentially"] == 1
     assert row["quick_test"] == 1
     assert row["excluded_rows"] == 1
 
     loaded = hist.load_df(rid)
-    assert list(loaded["Classification"]) == [ACCEPTABLE, NOT_ACCEPTABLE, POTENTIALLY_ACCEPTABLE]
+    assert list(loaded["Classification"]) == [
+        ACCEPTABLE, NOT_ACCEPTABLE, MANUAL_REVIEW, DRIVER_GUIDANCE,
+    ]
     assert hist.load_xlsx(rid) == b"PK\x03\x04 fake xlsx"
 
 
