@@ -381,13 +381,13 @@ def _storage_warning():
     """
     if not hist.is_persistent():
         st.warning(
-            "**History is not persistent on this server.** No data disk is "
-            "mounted, so saved reports are written to temporary storage and "
-            "are wiped whenever the service restarts or idles out — the "
-            "Dashboard and History will keep resetting. To fix: in the Render "
-            "dashboard, sync the service to the blueprint in `render.yaml` "
-            "(Starter plan with the 1GB disk at `/var/data`), or configure an "
-            "external store."
+            "**History is not persistent on this server.** No storage bucket "
+            "is configured, so saved reports are written to temporary storage "
+            "and are wiped whenever the service restarts or idles out — the "
+            "Dashboard and History will keep resetting. To fix: set "
+            "`S3_BUCKET`, `S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` and "
+            "`AWS_SECRET_ACCESS_KEY` in Render → Environment (see "
+            "`render.yaml`)."
         )
 
 

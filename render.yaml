@@ -1,26 +1,31 @@
 # Render deployment for the Trip Reason Variance dashboard.
-# Connect this repo in the Render dashboard (New > Blueprint), then set the two
+# Connect this repo in the Render dashboard (New > Blueprint), then set the
 # secret env vars below when prompted. The data is upload-only — nothing with
 # PII is stored in the repo or the image.
+#
+# Report history persists in an S3-compatible bucket (Backblaze B2 /
+# Cloudflare R2), NOT on a Render disk — so the free plan works. Without the
+# four S3_*/AWS_* vars the app still runs but history is wiped on every
+# restart/idle spin-down (it shows a warning when that's the case).
 services:
   - type: web
     name: trip-reason-variance
     runtime: python
-    # Starter (paid) is required for the persistent disk below and removes the
-    # free-tier idle spin-down. The disk holds the report history + stats DB.
-    plan: starter
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python -m streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
-    disk:
-      name: data
-      mountPath: /var/data        # DATA_DIR below points here; survives redeploys
-      sizeGB: 1
     envVars:
       - key: OPENROUTER_API_KEY      # your sk-or-v1-... key — set in the Render dashboard
         sync: false
       - key: APP_PASSWORD            # the password you share with Harris — set in the dashboard
         sync: false
-      - key: DATA_DIR                # where report history + the SQLite DB live
-        value: /var/data
+      - key: S3_BUCKET               # bucket name for report history (PII — keep it private)
+        sync: false
+      - key: S3_ENDPOINT_URL         # e.g. https://s3.eu-central-003.backblazeb2.com
+        sync: false
+      - key: AWS_ACCESS_KEY_ID       # the bucket application key id
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY   # the bucket application key secret
+        sync: false
       - key: PYTHON_VERSION
         value: "3.12.7"
