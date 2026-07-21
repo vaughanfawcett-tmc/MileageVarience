@@ -373,6 +373,24 @@ def _render_results(df: pd.DataFrame, xlsx: bytes | None, file_name: str):
     )
 
 
+def _storage_warning():
+    """Warn loudly when history is on ephemeral storage (no persistent disk).
+
+    Without this, saved reports vanish on every restart/idle spin-down and the
+    History and Dashboard views just look mysteriously empty.
+    """
+    if not hist.is_persistent():
+        st.warning(
+            "**History is not persistent on this server.** No data disk is "
+            "mounted, so saved reports are written to temporary storage and "
+            "are wiped whenever the service restarts or idles out — the "
+            "Dashboard and History will keep resetting. To fix: in the Render "
+            "dashboard, sync the service to the blueprint in `render.yaml` "
+            "(Starter plan with the 1GB disk at `/var/data`), or configure an "
+            "external store."
+        )
+
+
 def _process_guide():
     """On-page 'how to prepare and run a report' guide for the team.
 
@@ -473,6 +491,7 @@ def _new_report_view(model: str, quick: bool):
 
 def _history_view():
     st.markdown("## Report history")
+    _storage_warning()
     reports = hist.list_reports()
     if reports.empty:
         st.markdown(
@@ -539,6 +558,7 @@ def _history_view():
 
 def _dashboard_view():
     st.markdown("## Dashboard")
+    _storage_warning()
     reports = hist.list_reports()
     if reports.empty:
         st.markdown(

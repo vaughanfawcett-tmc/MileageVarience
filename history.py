@@ -107,6 +107,24 @@ def data_dir() -> Path:
     return fallback
 
 
+def is_persistent() -> bool:
+    """True when history is stored on the configured/mounted data dir.
+
+    False means we fell back to an ephemeral directory (no disk mounted, or
+    DATA_DIR unwritable) — saved reports will NOT survive a restart or
+    redeploy, and on Render's free tier they vanish on every idle spin-down.
+    The app uses this to warn users instead of losing data silently.
+    """
+    resolved = data_dir()
+    intended = [Path(os.environ["DATA_DIR"])] if os.environ.get("DATA_DIR") else []
+    intended.append(Path("/var/data"))
+    if resolved in intended:
+        return True
+    # Local dev: ./.data lives in the repo and does persist. On Render (which
+    # sets RENDER=true) the same path is on an ephemeral filesystem.
+    return resolved == Path.cwd() / ".data" and not os.environ.get("RENDER")
+
+
 def _reports_dir() -> Path:
     d = data_dir() / "reports"
     d.mkdir(parents=True, exist_ok=True)
